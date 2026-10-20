@@ -36,9 +36,9 @@ public final class OreSimModule extends ClientModule {
     private final net.ccbluex.liquidbounce.config.types.Value<String> seedText = text("Seed", "");
     private final Map<OreKind, net.ccbluex.liquidbounce.config.types.Value<Boolean>> enabledKinds = new EnumMap<>(OreKind.class);
 
-    /** Present only when the Baritone mod is installed. */
-    private final net.ccbluex.liquidbounce.config.types.Value<Boolean> baritoneAllowed =
-            BaritoneSupport.installed() ? bool("Baritone", false) : null;
+    /** Always shown, like Rejects' "baritone" setting; it does something only when the Baritone mod is installed. */
+    private final net.ccbluex.liquidbounce.config.types.Value<Boolean> baritoneAllowed = bool("Baritone", false);
+    private boolean baritoneMissingShown;
     private BaritoneBridge baritone;
     private final java.util.Set<Long> unreachable = new java.util.HashSet<>();
 
@@ -67,14 +67,19 @@ public final class OreSimModule extends ClientModule {
             }
         });
         seedText.onChanged(text -> reload());
-        if (baritoneAllowed != null) {
-            on(net.ccbluex.liquidbounce.event.events.GameTickEvent.class, event -> {
-                if (baritoneAllowed.get() && mc.player != null && mc.level != null && table != null) {
-                    if (baritone == null) baritone = new BaritoneBridge(this);
-                    baritone.watchMine();
+        on(net.ccbluex.liquidbounce.event.events.GameTickEvent.class, event -> {
+            if (!baritoneAllowed.get() || mc.player == null || mc.level == null || table == null) return;
+            if (!BaritoneSupport.installed()) {
+                if (!baritoneMissingShown) {
+                    baritoneMissingShown = true;
+                    say("OreSim: the Baritone setting is on, but the Baritone mod is not installed");
                 }
-            });
-        }
+                return;
+            }
+            if (baritone == null) baritone = new BaritoneBridge(this);
+            baritone.watchMine();
+        });
+        baritoneAllowed.onChanged(on -> baritoneMissingShown = false);
     }
 
     @Override
@@ -100,7 +105,7 @@ public final class OreSimModule extends ClientModule {
 
     /** Starts Baritone on the given kinds (every shown kind when empty); returns a status line for chat. Used by {@code .oresim mine}. */
     public String baritoneMine(java.util.Set<OreKind> wanted) {
-        if (baritoneAllowed == null) return "Baritone is not installed";
+        if (!BaritoneSupport.installed()) return "the Baritone mod is not installed";
         if (!getRunning()) return "Enable OreSim first";
         if (baritone == null) baritone = new BaritoneBridge(this);
         unreachable.clear();

@@ -98,6 +98,9 @@ final class OreSimDevTest {
                         OreSimAddon.module.setEnabled(true);
                     } else if (ticks == 400) {
                         OreSimAddon.LOG.info("ORESIM === overworld");
+                        OreSimAddon.LOG.info("ORESIM baritone value present={} installed={}",
+                                net.ccbluex.liquidbounce.config.ConfigSystem.INSTANCE.findValueByKey("liquidbounce.modules.oreSim.baritone") != null, BaritoneSupport.installed());
+                        net.ccbluex.liquidbounce.features.command.CommandManager.INSTANCE.execute("value set liquidbounce.modules.oreSim.baritone true");
                         report(mc);
                         net.minecraft.client.Screenshot.grab(mc.gameDirectory, "oresim.png", mc.gameRenderer.mainRenderTarget(), 1, c -> {});
                     } else if (ticks == 420) {
