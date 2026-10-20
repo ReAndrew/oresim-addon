@@ -12,6 +12,7 @@ public final class OreSimAddon extends LiquidBounceAddon {
     public void onInitialize() {
         module = new OreSimModule();
         registerModules(module);
+        registerCommand(OreSimCommand::register);
         OreSimDevTest.install(this);
     }
 }

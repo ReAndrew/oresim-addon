@@ -36,6 +36,12 @@ public final class OreSimModule extends ClientModule {
     private final net.ccbluex.liquidbounce.config.types.Value<String> seedText = text("Seed", "");
     private final Map<OreKind, net.ccbluex.liquidbounce.config.types.Value<Boolean>> enabledKinds = new EnumMap<>(OreKind.class);
 
+    /** Present only when the Baritone mod is installed. */
+    private final net.ccbluex.liquidbounce.config.types.Value<Boolean> baritoneAllowed =
+            BaritoneBridge.available() ? bool("Baritone", false) : null;
+    private BaritoneBridge baritone;
+    private final java.util.Set<Long> unreachable = new java.util.HashSet<>();
+
     private final Map<Long, Map<OreKind, LongArrayList>> chunks = new HashMap<>();
     private OreTable table;
     private Long seed;
@@ -61,6 +67,14 @@ public final class OreSimModule extends ClientModule {
             }
         });
         seedText.onChanged(text -> reload());
+        if (baritoneAllowed != null) {
+            on(net.ccbluex.liquidbounce.event.events.GameTickEvent.class, event -> {
+                if (baritoneAllowed.get() && mc.player != null && mc.level != null && table != null) {
+                    if (baritone == null) baritone = new BaritoneBridge(this);
+                    baritone.watchMine();
+                }
+            });
+        }
     }
 
     @Override
@@ -74,10 +88,73 @@ public final class OreSimModule extends ClientModule {
     }
 
     private void reset() {
+        if (baritone != null) baritone.stop();
+        unreachable.clear();
         chunks.clear();
         table = null;
         seed = null;
         tableDimension = null;
+    }
+
+    // Baritone: mine the simulated ores (Rejects' "baritone" option, through Baritone's public API).
+
+    /** Starts Baritone on the given kinds (every shown kind when empty); returns a status line for chat. Used by {@code .oresim mine}. */
+    public String baritoneMine(java.util.Set<OreKind> wanted) {
+        if (baritoneAllowed == null) return "Baritone is not installed";
+        if (!getRunning()) return "Enable OreSim first";
+        if (baritone == null) baritone = new BaritoneBridge(this);
+        unreachable.clear();
+        java.util.Set<OreKind> kinds = java.util.EnumSet.noneOf(OreKind.class);
+        for (OreKind kind : wanted.isEmpty() ? java.util.EnumSet.allOf(OreKind.class) : wanted) {
+            if (enabledKinds.get(kind).get()) kinds.add(kind);
+        }
+        return baritone.start(kinds);
+    }
+
+    public void baritoneStop() {
+        if (baritone != null) baritone.stop();
+    }
+
+    public boolean baritoneRunning() {
+        return baritone != null && baritone.running();
+    }
+
+    public List<BlockPos> baritoneGoals() {
+        return baritone == null ? List.of() : baritone.goals();
+    }
+
+    /** The simulated ores of the given kinds nearest to the player, skipping mined and unreachable ones. */
+    List<BlockPos> nearestOres(java.util.Set<OreKind> kinds, int limit, List<BlockPos> previous) {
+        if (mc.player == null || mc.level == null) return List.of();
+        double px = mc.player.getX(), py = mc.player.getY(), pz = mc.player.getZ();
+        double reach = chunkRange.get() * 16.0;
+        List<BlockPos> found = new java.util.ArrayList<>();
+        for (Map<OreKind, LongArrayList> chunk : chunks.values()) {
+            for (Map.Entry<OreKind, LongArrayList> entry : chunk.entrySet()) {
+                if (!kinds.contains(entry.getKey())) continue;
+                LongArrayList positions = entry.getValue();
+                for (int i = 0; i < positions.size(); i++) {
+                    long packed = positions.getLong(i);
+                    if (unreachable.contains(packed)) continue;
+                    BlockPos pos = BlockPos.of(packed);
+                    double dx = pos.getX() + 0.5 - px, dz = pos.getZ() + 0.5 - pz;
+                    if (dx * dx + dz * dz > reach * reach) continue;
+                    if (mc.level.getChunkSource().getChunkNow(pos.getX() >> 4, pos.getZ() >> 4) != null && mc.level.getBlockState(pos).isAir()) continue;
+                    found.add(pos);
+                }
+            }
+        }
+        found.sort(java.util.Comparator.comparingDouble(p -> p.distToCenterSqr(px, py, pz)));
+        return found.size() > limit ? List.copyOf(found.subList(0, limit)) : List.copyOf(found);
+    }
+
+    void skip(BlockPos pos) {
+        unreachable.add(pos.asLong());
+    }
+
+    void say(String message) {
+        OreSimAddon.LOG.info(message);
+        if (mc.player != null) mc.player.sendSystemMessage(net.minecraft.network.chat.Component.literal(message));
     }
 
     /** Positions held for a chunk, for tests. */

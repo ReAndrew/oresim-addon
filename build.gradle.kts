@@ -24,6 +24,9 @@ dependencies {
     implementation("net.fabricmc.fabric-api:fabric-api:0.160.5+26.3")
     implementation("net.fabricmc:fabric-language-kotlin:1.14.1+kotlin.2.4.20")
     implementation("net.ccbluex:liquidbounce:0.41.0+26.3")
+    // Baritone is only needed at compile time; the add-on talks to it only when the mod is installed.
+    compileOnly(files(providers.gradleProperty("baritoneJar").orElse(
+        System.getProperty("user.home") + "/.local/share/liquidlauncher/mod_cache/baritone/baritone-fabric/26.3-1.11.1-21-gd12a75c4/baritone-fabric-26.3-1.11.1-21-gd12a75c4.jar")))
 }
 
 tasks.withType<JavaCompile>().configureEach { options.encoding = "UTF-8"; options.release = 25 }

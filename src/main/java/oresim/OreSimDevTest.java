@@ -23,13 +23,17 @@ import java.util.Set;
  * rock, enables the module, compares its prediction with the real ores, takes a screenshot and quits.
  */
 final class OreSimDevTest {
-    private static final boolean ENABLED = System.getenv("ORESIM_AUTOTEST") != null;
+    private static final boolean ENABLED = System.getenv("ORESIM_AUTOTEST") != null && !"baritone".equals(System.getenv("ORESIM_AUTOTEST"));
     private static final int RADIUS = 3;
     private static int stage, ticks;
 
     private OreSimDevTest() {}
 
     static void install(net.ccbluex.liquidbounce.features.addon.LiquidBounceAddon addon) {
+        if ("baritone".equals(System.getenv("ORESIM_AUTOTEST"))) {
+            OreSimBaritoneTest.install(addon);
+            return;
+        }
         if (!ENABLED) return;
         addon.on(GameTickEvent.class, event -> tick());
     }
