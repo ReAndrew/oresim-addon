@@ -38,7 +38,7 @@ public final class OreSimModule extends ClientModule {
 
     /** Present only when the Baritone mod is installed. */
     private final net.ccbluex.liquidbounce.config.types.Value<Boolean> baritoneAllowed =
-            BaritoneBridge.available() ? bool("Baritone", false) : null;
+            BaritoneSupport.installed() ? bool("Baritone", false) : null;
     private BaritoneBridge baritone;
     private final java.util.Set<Long> unreachable = new java.util.HashSet<>();
 
@@ -146,6 +146,12 @@ public final class OreSimModule extends ClientModule {
         }
         found.sort(java.util.Comparator.comparingDouble(p -> p.distToCenterSqr(px, py, pz)));
         return found.size() > limit ? List.copyOf(found.subList(0, limit)) : List.copyOf(found);
+    }
+
+    /** Whether a goal has been mined (its block is now air) or is no longer predicted. */
+    boolean isMinedOut(BlockPos pos) {
+        return mc.level != null && mc.level.getChunkSource().getChunkNow(pos.getX() >> 4, pos.getZ() >> 4) != null
+                && mc.level.getBlockState(pos).isAir();
     }
 
     void skip(BlockPos pos) {

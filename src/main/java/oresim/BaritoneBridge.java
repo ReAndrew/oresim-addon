@@ -8,7 +8,6 @@ import baritone.api.pathing.goals.GoalTwoBlocks;
 import baritone.api.process.IBaritoneProcess;
 import baritone.api.process.PathingCommand;
 import baritone.api.process.PathingCommandType;
-import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 
@@ -20,7 +19,7 @@ import java.util.Set;
 /**
  * Lets Baritone mine the simulated ores. Rejects hooks Baritone's obfuscated MineProcess with a mixin; this
  * registers a process of its own through the public API instead, so it keeps working across Baritone builds.
- * Only touch this class when {@link #available()} is true (it links against Baritone).
+ * Only touch this class when {@link BaritoneSupport#installed()} is true (it links against Baritone).
  */
 final class BaritoneBridge implements IBaritoneProcess {
     /** Nearest simulated ores handed to the pathfinder at once. */
@@ -72,10 +71,6 @@ final class BaritoneBridge implements IBaritoneProcess {
         module.say("OreSim: " + start(target));
     }
 
-    static boolean available() {
-        return FabricLoader.getInstance().isModLoaded("baritone");
-    }
-
     /** Starts mining the given ore kinds (all kinds the module shows when empty). Returns a status line. */
     String start(Set<OreKind> wanted) {
         IBaritone baritone = BaritoneAPI.getProvider().getPrimaryBaritone();
@@ -87,6 +82,8 @@ final class BaritoneBridge implements IBaritoneProcess {
         kinds.clear();
         kinds.addAll(wanted.isEmpty() ? EnumSet.allOf(OreKind.class) : wanted);
         goals = List.of();
+        composite = null;
+        sinceRefresh = 0;
         active = true;
         return "Baritone is mining the simulated " + kinds;
     }
@@ -111,27 +108,71 @@ final class BaritoneBridge implements IBaritoneProcess {
         return active && module.getRunning() && mc.player != null && mc.level != null;
     }
 
+    /** How often the goal list is rebuilt while nothing changed (ticks); rebuilding re-plans the path. */
+    private static final int REFRESH = 100;
+
+    private Goal composite;
+    private int sinceRefresh;
+
     @Override
     public PathingCommand onTick(boolean calcFailed, boolean isSafeToCancel) {
-        List<BlockPos> next = module.nearestOres(kinds, GOALS, goals);
-        if (calcFailed && !goals.isEmpty()) {
-            // The nearest one is unreachable: skip it rather than retrying forever.
-            module.skip(goals.get(0));
-            next = module.nearestOres(kinds, GOALS, goals);
+        IBaritone baritone = registeredWith;
+        if (baritone != null) {
+            if (otherProcessActive(baritone)) return giveWay();
+            if (baritone.getMineProcess().isActive()) {
+                // The user typed another #mine: follow it when it is an ore, give way when it is not.
+                Set<OreKind> wanted = mineTarget(baritone);
+                if (wanted.isEmpty()) return giveWay();
+                if (!wanted.equals(kinds)) {
+                    kinds.clear();
+                    kinds.addAll(wanted);
+                    goals = List.of();
+                }
+            }
         }
+
+        boolean refresh = goals.isEmpty() || ++sinceRefresh >= REFRESH || calcFailed;
+        if (!refresh) {
+            for (BlockPos pos : goals) {
+                if (module.isMinedOut(pos)) {
+                    refresh = true;
+                    break;
+                }
+            }
+        }
+        if (!refresh) return new PathingCommand(composite, PathingCommandType.REVALIDATE_GOAL_AND_PATH);
+
+        if (calcFailed && !goals.isEmpty()) module.skip(goals.get(0)); // the nearest one is unreachable
+        sinceRefresh = 0;
+        List<BlockPos> next = module.nearestOres(kinds, GOALS, goals);
         if (next.isEmpty()) {
-            active = false;
-            goals = List.of();
             module.say("OreSim: no simulated ore left in range, Baritone stopped");
-            return new PathingCommand(null, PathingCommandType.DEFER);
+            return giveWay();
         }
 
         boolean changed = !next.equals(goals);
         goals = next;
-        List<Goal> parts = new ArrayList<>(next.size());
-        for (BlockPos pos : next) parts.add(new GoalTwoBlocks(pos));
-        return new PathingCommand(new GoalComposite(parts.toArray(new Goal[0])),
-                changed ? PathingCommandType.SET_GOAL_AND_PATH : PathingCommandType.REVALIDATE_GOAL_AND_PATH);
+        if (changed || composite == null) {
+            List<Goal> parts = new ArrayList<>(next.size());
+            for (BlockPos pos : next) parts.add(new GoalTwoBlocks(pos));
+            composite = new GoalComposite(parts.toArray(new Goal[0]));
+        }
+        return new PathingCommand(composite, changed ? PathingCommandType.SET_GOAL_AND_PATH : PathingCommandType.REVALIDATE_GOAL_AND_PATH);
+    }
+
+    private PathingCommand giveWay() {
+        active = false;
+        goals = List.of();
+        composite = null;
+        return new PathingCommand(null, PathingCommandType.DEFER);
+    }
+
+    /** Whether the user started something else (#goto, #follow, ...): it wins over a mining run that is already going. */
+    private boolean otherProcessActive(IBaritone baritone) {
+        return baritone.getCustomGoalProcess().isActive() || baritone.getGetToBlockProcess().isActive()
+                || baritone.getFollowProcess().isActive() || baritone.getExploreProcess().isActive()
+                || baritone.getFarmProcess().isActive() || baritone.getBuilderProcess().isActive()
+                || baritone.getElytraProcess().isActive();
     }
 
     @Override

@@ -21,6 +21,7 @@ final class OreSimBaritoneTest {
     private static BlockPos first;
     private static double startDist = -1;
     private static int mined;
+    private static final java.util.Set<BlockPos> seen = new java.util.HashSet<>();
 
     private OreSimBaritoneTest() {}
 
@@ -53,7 +54,7 @@ final class OreSimBaritoneTest {
                 case 1 -> {
                     if (mc.player != null && mc.level != null && ++ticks > 120) {
                         if (mc.gui.screen() != null) mc.gui.setScreen(null);
-                        log("baritone loaded={} primary={}", BaritoneBridge.available(), BaritoneAPI.getProvider().getPrimaryBaritone() != null);
+                        log("baritone loaded={} primary={}", BaritoneSupport.installed(), BaritoneAPI.getProvider().getPrimaryBaritone() != null);
                         OreSimAddon.module.setEnabled(true);
                         stage = 2;
                         ticks = 0;
@@ -83,36 +84,50 @@ final class OreSimBaritoneTest {
                         ticks = 0;
                     }
                 }
-                case 4 -> { // coal is near: let it dig there
+                case 4 -> { // coal is near: let it dig there; any goal turning into air counts
                     var baritone = BaritoneAPI.getProvider().getPrimaryBaritone();
                     var module = OreSimAddon.module;
-                    if (ticks == 0) {
-                        baritone.getCommandManager().execute("mine coal_ore");
-                    }
+                    if (ticks == 0) baritone.getCommandManager().execute("mine coal_ore");
+                    for (BlockPos g : module.baritoneGoals()) seen.add(g);
                     if (ticks % 40 == 5) {
                         var goals = module.baritoneGoals();
-                        BlockPos nearest = goals.isEmpty() ? null : goals.get(0);
-                        if (first == null && nearest != null) first = nearest;
-                        log("t={} inControl={} pathing={} goals={} nearest={} player={}", ticks,
+                        log("t={} inControl={} pathing={} goals={} nearest={} player={} seen={}", ticks,
                                 baritone.getPathingControlManager().mostRecentInControl().map(p -> p.displayName0()).orElse("-"),
-                                baritone.getPathingBehavior().isPathing(), goals.size(), nearest, mc.player.blockPosition());
+                                baritone.getPathingBehavior().isPathing(), goals.size(), goals.isEmpty() ? null : goals.get(0), mc.player.blockPosition(), seen.size());
                     }
-                    if (first != null && mc.level.getBlockState(first).isAir()) {
-                        log("COAL MINED first target {} after {} ticks", first, ticks);
+                    for (BlockPos g : seen) if (mc.level.getBlockState(g).isAir()) mined++;
+                    seen.removeIf(g -> mc.level.getBlockState(g).isAir());
+                    if (mined >= 3) {
+                        log("COAL MINED {} targets after {} ticks", mined, ticks);
                         stage = 5;
                         ticks = 0;
-                        baritone.getCommandManager().execute("cancel");
                     } else if (++ticks > 1600) {
-                        log("TIMEOUT first={}", first);
+                        log("TIMEOUT mined={}", mined);
                         stage = 5;
                         ticks = 0;
                     }
                 }
-                case 5 -> { // a non-ore target must stay with Baritone
+                case 5 -> { // while OreSim drives, another command must win; a non-ore #mine must stay with Baritone
                     var baritone = BaritoneAPI.getProvider().getPrimaryBaritone();
                     if (ticks == 0) baritone.getCommandManager().execute("mine stone");
                     if (++ticks == 40) {
-                        log("STONE running={} inControl={} (OreSim must not take over)", OreSimAddon.module.baritoneRunning(),
+                        log("STONE running={} inControl={} (OreSim must have given way)", OreSimAddon.module.baritoneRunning(),
+                                baritone.getPathingControlManager().mostRecentInControl().map(p -> p.displayName0()).orElse("-"));
+                        baritone.getCommandManager().execute("cancel");
+                        baritone.getCommandManager().execute("mine iron_ore");
+                        stage = 8;
+                        ticks = 0;
+                    }
+                }
+                case 8 -> { // OreSim again, then a #goto takes over from it
+                    var baritone = BaritoneAPI.getProvider().getPrimaryBaritone();
+                    if (++ticks == 40) {
+                        log("IRON again running={} inControl={}", OreSimAddon.module.baritoneRunning(),
+                                baritone.getPathingControlManager().mostRecentInControl().map(p -> p.displayName0()).orElse("-"));
+                        var p = mc.player.blockPosition();
+                        baritone.getCommandManager().execute("goto " + p.getX() + " " + p.getY() + " " + (p.getZ() + 6));
+                    } else if (ticks == 100) {
+                        log("GOTO running={} inControl={} (OreSim must have given way)", OreSimAddon.module.baritoneRunning(),
                                 baritone.getPathingControlManager().mostRecentInControl().map(p -> p.displayName0()).orElse("-"));
                         baritone.getCommandManager().execute("cancel");
                         stage = 6;

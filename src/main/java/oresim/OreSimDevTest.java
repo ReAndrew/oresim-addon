@@ -25,7 +25,13 @@ import java.util.Set;
 final class OreSimDevTest {
     private static final boolean ENABLED = System.getenv("ORESIM_AUTOTEST") != null && !"baritone".equals(System.getenv("ORESIM_AUTOTEST"));
     private static final int RADIUS = 3;
-    private static int stage, ticks;
+    /** ORESIM_AUTOTEST=world:<save name> opens an existing save instead of creating one. */
+    private static final String WORLD = System.getenv("ORESIM_AUTOTEST") != null && System.getenv("ORESIM_AUTOTEST").startsWith("world:")
+            ? System.getenv("ORESIM_AUTOTEST").substring(6)
+            : System.getenv("ORESIM_AUTOTEST") != null && System.getenv("ORESIM_AUTOTEST").startsWith("prepare:") ? System.getenv("ORESIM_AUTOTEST").substring(8) : null;
+    /** prepare:<save name>: only lets the game upgrade an older save (it then drops to the title screen, and the world stays locked until exit). */
+    private static final boolean PREPARE = System.getenv("ORESIM_AUTOTEST") != null && System.getenv("ORESIM_AUTOTEST").startsWith("prepare:");
+    private static int stage, ticks, reopen;
 
     private OreSimDevTest() {}
 
@@ -43,7 +49,14 @@ final class OreSimDevTest {
         try {
             switch (stage) {
                 case 0 -> {
-                    if (mc.level == null && mc.gui.screen() != null && ++ticks > 40) {
+                    if (mc.level == null && mc.gui.screen() != null && ++ticks > 40 && WORLD != null) {
+                        // A world a vanilla server of another version generated (tools/genworld.sh): open it as it is.
+                        OreSimAddon.LOG.info("ORESIM opening {} (exists={})", WORLD, java.nio.file.Files.isDirectory(mc.gameDirectory.toPath().resolve("saves").resolve(WORLD)));
+                        mc.createWorldOpenFlows().openWorld(WORLD, () -> OreSimAddon.LOG.error("ORESIM could not open {}", WORLD));
+                        OreSimAddon.LOG.info("ORESIM openWorld returned, screen={}", mc.gui.screen() == null ? null : mc.gui.screen().getClass().getSimpleName());
+                        stage = 1;
+                        ticks = 0;
+                    } else if (mc.level == null && mc.gui.screen() != null && ticks > 40 && WORLD == null) {
                         var settings = new LevelSettings("oresim-test-" + System.currentTimeMillis() / 1000, GameType.CREATIVE,
                                 new LevelSettings.DifficultySettings(Difficulty.PEACEFUL, false, false), true, WorldDataConfiguration.DEFAULT);
                         mc.createWorldOpenFlows().createFreshLevel(settings.levelName(), settings, WorldOptions.defaultWithRandomSeed(),
@@ -53,6 +66,24 @@ final class OreSimDevTest {
                     }
                 }
                 case 1 -> {
+                    if (WORLD != null && mc.player == null && (++ticks % 100 == 0 || ticks < 6)) {
+                        if (ticks == 300) net.minecraft.client.Screenshot.grab(mc.gameDirectory, "oresim-stuck.png", mc.gameRenderer.mainRenderTarget(), 1, c -> {});
+                        OreSimAddon.LOG.info("ORESIM waiting, screen={}", mc.gui.screen() == null ? null : mc.gui.screen().getClass().getName());
+        // After the one-time upgrade of an older save the game drops back to the title screen with the save still locked.
+                        if (PREPARE && mc.gui.screen() instanceof net.minecraft.client.gui.screens.TitleScreen && ticks > 250) {
+                            OreSimAddon.LOG.info("ORESIM PREPARED {}", WORLD);
+                            stage = 4;
+                            mc.stop();
+                            return;
+                        }
+                        // An older save asks before it is upgraded ("load without backup" is the second button).
+                        if (mc.gui.screen() instanceof net.minecraft.client.gui.screens.BackupConfirmScreen backup) {
+                            var buttons = new java.util.ArrayList<net.minecraft.client.gui.components.Button>();
+                            for (var child : backup.children()) if (child instanceof net.minecraft.client.gui.components.Button bt) buttons.add(bt);
+                            for (var bt : buttons) OreSimAddon.LOG.info("ORESIM backup button: {}", bt.getMessage().getString());
+                            if (buttons.size() >= 2) buttons.get(1).onPress(new net.minecraft.client.input.KeyEvent(257, 0, 0));
+                        }
+                    }
                     if (mc.player != null && mc.level != null && ++ticks > 60) {
                         if (mc.gui.screen() != null) mc.gui.setScreen(null);
                         mc.player.connection.sendCommand("gamemode spectator");
