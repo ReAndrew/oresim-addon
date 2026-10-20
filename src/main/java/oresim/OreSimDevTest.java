@@ -104,15 +104,33 @@ final class OreSimDevTest {
                 if (features.get(i).feature().value() instanceof net.minecraft.world.level.levelgen.feature.AbstractOreFeature ore) {
                     var written = new java.util.ArrayList<net.minecraft.world.level.block.Block>();
                     for (var r : ore.targetStates()) written.add(r.state().getBlock());
-                    real.append(step).append(':').append(i).append(':').append(OreKind.of(written)).append('/').append(ore.size()).append(' ');
+                    real.append(step).append(':').append(i).append(':').append(OreKind.of(written)).append('/').append(ore.size()).append('#').append(features.get(i).placement().get(0)).append(' ');
                 }
             }
         }
         var list = new java.util.ArrayList<>(OreSimAddon.module.table().all());
         list.sort(java.util.Comparator.comparingInt((OreTable.Ore o) -> o.step()).thenComparingInt(OreTable.Ore::index));
-        for (var o : list) mine.append(o.step()).append(':').append(o.index()).append(':').append(o.kind()).append('/').append(o.feature().size()).append(' ');
+        for (var o : list) mine.append(o.step()).append(':').append(o.index()).append(':').append(o.kind()).append('/').append(o.feature().size()).append('#').append(o.placement().get(0)).append(' ');
+        var biomeSeen = new java.util.TreeSet<String>();
+        var pc = mc.player.chunkPosition();
+        for (int dx = -3; dx <= 3; dx++) for (int dz = -3; dz <= 3; dz++) {
+            var ch = mc.level.getChunkSource().getChunkNow(pc.x() + dx, pc.z() + dz);
+            if (ch == null) continue;
+            for (var section : ch.getSections()) section.getBiomes().getAll(h -> h.unwrapKey().ifPresent(k -> biomeSeen.add(k.identifier().getPath())));
+        }
+        OreSimAddon.LOG.info("ORESIM biomes in area: {}", biomeSeen);
+        for (var key : new java.util.ArrayList<>(biomeSeen)) {
+            var rk = net.minecraft.resources.ResourceKey.create(net.minecraft.core.registries.Registries.BIOME, net.minecraft.resources.Identifier.withDefaultNamespace(key));
+            StringBuilder b = new StringBuilder();
+            for (var o : OreSimAddon.module.table().oresIn(rk)) b.append(o.step()).append(':').append(o.index()).append(' ');
+            OreSimAddon.LOG.info("ORESIM ores in {}: {}", key, b);
+        }
         OreSimAddon.LOG.info("ORESIM order real: {}", real);
         OreSimAddon.LOG.info("ORESIM order mine: {}", mine);
+    }
+
+    private static boolean outer(long l, int pcx, int pcz) {
+        return Math.abs((BlockPos.getX(l) >> 4) - pcx) > RADIUS - 1 || Math.abs((BlockPos.getZ(l) >> 4) - pcz) > RADIUS - 1;
     }
 
     private static void report(Minecraft mc) throws Exception {
@@ -159,6 +177,12 @@ final class OreSimDevTest {
             }
         }
 
+        // Veins spill a few blocks past the chunk they start in, so positions in the outermost ring of
+        // scanned chunks are only half known; compare the inner chunks only.
+        for (OreKind kind : OreKind.values()) {
+            predicted.get(kind).removeIf(l -> outer(l, pcx, pcz));
+            real.get(kind).removeIf(l -> outer(l, pcx, pcz));
+        }
         for (OreKind kind : new OreKind[]{OreKind.COAL, OreKind.IRON}) {
             StringBuilder bands = new StringBuilder();
             for (int y0 = level.getMinY(); y0 < level.getMaxY(); y0 += 32) {
@@ -181,10 +205,29 @@ final class OreSimDevTest {
                     total++;
                     if (real.get(ore.kind()).contains(l)) hits++;
                 }
+                if (ore.kind() == OreKind.GOLD || ore.kind() == OreKind.QUARTZ) {
+                    long sy = 0; int n = entry.getValue().size(), miny = 999, maxy = -999;
+                    for (int i = 0; i < n; i++) { int y = BlockPos.getY(entry.getValue().getLong(i)); sy += y; miny = Math.min(miny, y); maxy = Math.max(maxy, y); }
+                    long ry = 0; int rn = 0, rminy = 999, rmaxy = -999;
+                    for (long l : real.get(ore.kind())) { int y = BlockPos.getY(l); ry += y; rn++; rminy = Math.min(rminy, y); rmaxy = Math.max(rmaxy, y); }
+                    OreSimAddon.LOG.info("ORESIM y {} idx={} pred n={} y={}..{} mean={} | real n={} y={}..{} mean={}", ore.kind(), ore.index(), n, miny, maxy, n == 0 ? 0 : sy / n, rn, rminy, rmaxy, rn == 0 ? 0 : ry / rn);
+                }
                 OreSimAddon.LOG.info("ORESIM feature {} step={} index={} size={} discard={} {} positions={} real-hit={}%", ore.kind(), ore.step(), ore.index(),
                         ore.feature().size(), ore.feature().discardChanceOnAirExposure(), ore.scattered() ? "scattered" : "vein", total, total == 0 ? 0 : 100 * hits / total);
             }
             byFeature.clear();
+        }
+        for (OreKind kind : new OreKind[]{OreKind.COAL, OreKind.COPPER}) {
+            Map<String, Integer> blocks = new java.util.TreeMap<>();
+            for (long l : predicted.get(kind)) {
+                if (real.get(kind).contains(l)) continue;
+                var chunk = level.getChunkSource().getChunkNow(BlockPos.getX(l) >> 4, BlockPos.getZ(l) >> 4);
+                if (chunk == null) continue;
+                blocks.merge(BuiltInRegistries.BLOCK.getKey(chunk.getBlockState(BlockPos.of(l)).getBlock()).getPath(), 1, Integer::sum);
+            }
+            var top = new java.util.ArrayList<>(blocks.entrySet());
+            top.sort((a, b) -> b.getValue() - a.getValue());
+            OreSimAddon.LOG.info("ORESIM missed {} lands on {}", kind, top.subList(0, Math.min(8, top.size())));
         }
         for (OreKind kind : OreKind.values()) {
             Set<Long> p = predicted.get(kind), r = real.get(kind);

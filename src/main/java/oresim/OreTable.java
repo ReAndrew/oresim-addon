@@ -7,6 +7,7 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.biome.FeatureSorter;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.chunk.ChunkGenerator;
 import net.minecraft.world.level.dimension.LevelStem;
 import net.minecraft.world.level.levelgen.feature.AbstractOreFeature;
 import net.minecraft.world.level.levelgen.feature.BlockReplacement;
@@ -33,6 +34,7 @@ public final class OreTable {
     private final Map<ResourceKey<Biome>, List<Ore>> byBiome = new HashMap<>();
     private final List<Ore> fallback = new ArrayList<>();
     private final List<Ore> all = new ArrayList<>();
+    private ChunkGenerator generator;
 
     private OreTable() {}
 
@@ -59,6 +61,7 @@ public final class OreTable {
         }
 
         OreTable table = new OreTable();
+        table.generator = stem.generator();
         table.all.addAll(ores.values());
         for (Holder<Biome> biome : biomes) {
             List<Ore> list = new ArrayList<>();
@@ -77,6 +80,11 @@ public final class OreTable {
     /** Ores generated in a biome; a biome the preset does not know gets the first biome's ores. */
     public List<Ore> oresIn(ResourceKey<Biome> biome) {
         return byBiome.getOrDefault(biome, fallback);
+    }
+
+    /** The preset's generator: it knows the generation height (the nether is 128 tall in a 256 tall level). */
+    public ChunkGenerator generator() {
+        return generator;
     }
 
     public List<Ore> all() {

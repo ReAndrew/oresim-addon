@@ -51,7 +51,7 @@ public final class OreSimulator {
         this.table = table;
         this.seed = seed;
         this.airCheck = airCheck;
-        this.heightContext = WorldGenerationContext.of(level);
+        this.heightContext = new WorldGenerationContext(table.generator(), level);
     }
 
     /** Ore positions (packed {@link BlockPos#asLong}) of the vein features that start in this chunk. */
