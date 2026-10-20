@@ -6,6 +6,10 @@ world seed and outlines them through walls. Useful on servers where anti-xray hi
 It replays vanilla ore generation with the game's own classes (`WorldgenRandom`, the placed ore features and
 their placement modifiers), so it follows the ore table of the Minecraft version you play.
 
+> **The world seed is required.** The add-on cannot predict anything without it. In singleplayer it is read
+> from the world automatically; on a server you have to know the seed and enter it yourself
+> (`.seed <seed>`). With a wrong seed the shown ores will not match the real ones.
+
 ## Usage
 
 - Enable **OreSim** (Render category). In singleplayer the seed is read from the world.
