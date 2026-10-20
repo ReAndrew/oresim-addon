@@ -84,7 +84,8 @@ public final class OreSimModule extends ClientModule {
 
     @Override
     public void onEnabled() {
-        reload();
+        // The module is not "running" yet inside onEnabled, so simulateChunk would skip every chunk: reload on the next tick.
+        pendingReload = true;
     }
 
     @Override
@@ -190,25 +191,54 @@ public final class OreSimModule extends ClientModule {
         return mc.level;
     }
 
+    /** Text of the Seed value (empty = the integrated server's seed). Set by {@code .seed}. */
+    public String seedText() {
+        return seedText.get();
+    }
+
+    public void setSeedText(String text) {
+        seedText.set(text);
+    }
+
     /** Seed in use: the Seed value, else the integrated server's, else unknown. */
     public Long resolveSeed() {
         String text = seedText.get().trim();
-        if (!text.isEmpty()) {
-            try {
-                return Long.parseLong(text);
-            } catch (NumberFormatException e) {
-                return (long) text.hashCode();
-            }
-        }
+        if (!text.isEmpty()) return parseSeed(text);
         var server = mc.getSingleplayerServer();
         return server == null ? null : server.overworld().getSeed();
+    }
+
+    /**
+     * A number (a pasted Java literal suffix such as {@code L} or a stray letter after the digits is ignored),
+     * otherwise a text seed hashed like vanilla's world creation screen.
+     */
+    static long parseSeed(String text) {
+        var number = java.util.regex.Pattern.compile("(-?\\d+)[a-zA-Z]?").matcher(text);
+        if (number.matches()) {
+            try {
+                return Long.parseLong(number.group(1));
+            } catch (NumberFormatException ignored) {
+                // out of range: treat as text, as vanilla does
+            }
+        }
+        return text.hashCode();
+    }
+
+    public Long seed() {
+        return seed;
     }
 
     public void reload() {
         chunks.clear();
         table = null;
+        Long previous = seed;
         seed = resolveSeed();
-        if (mc.level == null || seed == null) return;
+        if (mc.level == null) return;
+        if (seed == null) {
+            if (getRunning()) say("OreSim: no seed. On a server set it with .seed <seed>");
+            return;
+        }
+        if (!seed.equals(previous) && !seedText.get().isBlank()) say("OreSim: seed " + seed);
 
         try {
             tableDimension = mc.level.dimension();

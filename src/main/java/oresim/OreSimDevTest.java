@@ -114,6 +114,13 @@ final class OreSimDevTest {
                         OreSimAddon.LOG.info("ORESIM === nether, dimension={}", mc.level.dimension());
                         report(mc);
                         net.minecraft.client.Screenshot.grab(mc.gameDirectory, "oresim-nether.png", mc.gameRenderer.mainRenderTarget(), 1, c -> {});
+                    } else if (ticks == 620) {
+                        var commands = net.ccbluex.liquidbounce.features.command.CommandManager.INSTANCE;
+                        commands.execute("seed 12345f");
+                        OreSimAddon.LOG.info("ORESIM .seed 12345f -> {}", OreSimAddon.module.resolveSeed());
+                        commands.execute("seed clear");
+                        OreSimAddon.LOG.info("ORESIM .seed clear -> {}", OreSimAddon.module.resolveSeed());
+                        commands.execute("seed");
                     } else if (ticks == 640) {
                         OreSimAddon.LOG.info("ORESIM DONE");
                         stage = 4;
@@ -176,7 +183,9 @@ final class OreSimDevTest {
         var level = mc.level;
         int pcx = mc.player.chunkPosition().x(), pcz = mc.player.chunkPosition().z();
         Long seed = OreSimAddon.module.resolveSeed();
-        OreSimAddon.LOG.info("ORESIM seed={} player chunk={},{} loaded chunks={}", seed, pcx, pcz, OreSimAddon.module.chunkData().size());
+        long allPositions = 0;
+        for (var chunkOres : OreSimAddon.module.chunkData().values()) for (var list : chunkOres.values()) allPositions += list.size();
+        OreSimAddon.LOG.info("ORESIM seed={} player chunk={},{} loaded chunks={} positions={}", seed, pcx, pcz, OreSimAddon.module.chunkData().size(), allPositions);
 
         Map<OreKind, Set<Long>> predicted = new EnumMap<>(OreKind.class);
         Map<OreKind, Set<Long>> real = new EnumMap<>(OreKind.class);

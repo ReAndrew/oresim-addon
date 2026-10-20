@@ -1,0 +1,23 @@
+# Keep these in sync with the LiquidBounce release you target.
+[versions]
+jdk = "25"
+
+minecraft = "26.3"
+fabric-loom = "1.17-SNAPSHOT"
+fabric-loader = "0.19.5"
+fabric-api = "0.160.5+26.3"
+fabric-kotlin = "1.14.1+kotlin.2.4.20"
+liquidbounce = "0.41.0+26.3"
+# Compile-time only: the add-on talks to Baritone only when the mod is installed.
+baritone = "26.3-1.11.1-21-gd12a75c4"
+
+[libraries]
+minecraft = { group = "com.mojang", name = "minecraft", version.ref = "minecraft" }
+fabric-loader = { group = "net.fabricmc", name = "fabric-loader", version.ref = "fabric-loader" }
+fabric-api = { group = "net.fabricmc.fabric-api", name = "fabric-api", version.ref = "fabric-api" }
+fabric-kotlin = { group = "net.fabricmc", name = "fabric-language-kotlin", version.ref = "fabric-kotlin" }
+liquidbounce = { group = "net.ccbluex", name = "liquidbounce", version.ref = "liquidbounce" }
+baritone = { group = "baritone", name = "baritone-fabric", version.ref = "baritone" }
+
+[plugins]
+fabric-loom = { id = "net.fabricmc.fabric-loom", version.ref = "fabric-loom" }

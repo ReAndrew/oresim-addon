@@ -3,16 +3,25 @@
   "id": "oresim",
   "version": "${version}",
   "name": "OreSim",
-  "description": "Predicts ore veins from the world seed and draws them through walls (LiquidBounce add-on).",
-  "authors": ["AC2LB"],
+  "description": "Predicts ore veins from the world seed and draws them through walls. Optional Baritone mining of the predicted ores.",
+  "authors": ["ReAndrew"],
+  "contact": {
+    "sources": "https://github.com/ReAndrew/oresim-addon",
+    "issues": "https://github.com/ReAndrew/oresim-addon/issues"
+  },
   "license": "GPL-3.0-or-later",
   "environment": "client",
   "entrypoints": {
     "liquidbounce": ["oresim.OreSimAddon"]
   },
   "depends": {
-    "minecraft": "~26.3",
-    "fabricloader": ">=0.19.5",
+    "minecraft": "~${minecraft_version}",
+    "fabricloader": ">=${loader_version}",
     "liquidbounce": "*"
+  },
+  "custom": {
+    "modmenu": {
+      "parent": "liquidbounce"
+    }
   }
 }

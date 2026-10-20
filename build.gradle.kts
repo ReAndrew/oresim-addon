@@ -1,37 +1,70 @@
 plugins {
-    id("net.fabricmc.fabric-loom") version "1.17-SNAPSHOT"
+    alias(libs.plugins.fabric.loom)
     java
 }
 
 base {
-    archivesName = "oresim"
-    version = "1.0.0"
+    archivesName = project.property("archives_base_name") as String
+    // The Minecraft version the add-on is built for goes into its version, e.g. 1.0.0+26.3
+    version = "${project.property("mod_version")}+${libs.versions.minecraft.get()}"
 }
 
 repositories {
     mavenCentral()
     mavenLocal()
-    maven { url = uri("https://maven.ccbluex.net/releases") }
-    maven { url = uri("https://maven.ccbluex.net/snapshots") }
-    maven { url = uri("https://maven.fabricmc.net/") }
+    maven { name = "CCBlueX Releases"; url = uri("https://maven.ccbluex.net/releases") }
+    maven { name = "CCBlueX Snapshots"; url = uri("https://maven.ccbluex.net/snapshots") }
+    maven { name = "Fabric"; url = uri("https://maven.fabricmc.net/") }
 }
 
-java { toolchain { languageVersion = JavaLanguageVersion.of(25) } }
-
+// No mappings line and plain `implementation`: Loom uses Mojang's official names, like LiquidBounce itself.
 dependencies {
-    minecraft("com.mojang:minecraft:26.3")
-    implementation("net.fabricmc:fabric-loader:0.19.5")
-    implementation("net.fabricmc.fabric-api:fabric-api:0.160.5+26.3")
-    implementation("net.fabricmc:fabric-language-kotlin:1.14.1+kotlin.2.4.20")
-    implementation("net.ccbluex:liquidbounce:0.41.0+26.3")
-    // Baritone is only needed at compile time; the add-on talks to it only when the mod is installed.
-    compileOnly(files(providers.gradleProperty("baritoneJar").orElse(
-        System.getProperty("user.home") + "/.local/share/liquidlauncher/mod_cache/baritone/baritone-fabric/26.3-1.11.1-21-gd12a75c4/baritone-fabric-26.3-1.11.1-21-gd12a75c4.jar")))
+    minecraft(libs.minecraft)
+    implementation(libs.fabric.loader)
+    implementation(libs.fabric.api)
+    implementation(libs.fabric.kotlin)
+    implementation(libs.liquidbounce)
+    compileOnly(libs.baritone)
 }
 
-tasks.withType<JavaCompile>().configureEach { options.encoding = "UTF-8"; options.release = 25 }
+configurations.all {
+    resolutionStrategy.cacheChangingModulesFor(0, "seconds")
+}
 
 tasks.processResources {
-    inputs.property("version", project.version)
-    filesMatching("fabric.mod.json") { expand("version" to project.version) }
+    val modVersion = providers.gradleProperty("mod_version").zip(libs.versions.minecraft) { version, minecraft ->
+        "$version+$minecraft"
+    }
+    val minecraftVersion = libs.versions.minecraft
+    val loaderVersion = libs.versions.fabric.loader
+
+    inputs.property("version", modVersion)
+    inputs.property("minecraft_version", minecraftVersion)
+    inputs.property("loader_version", loaderVersion)
+
+    filesMatching("fabric.mod.json") {
+        expand(
+            mapOf(
+                "version" to modVersion.get(),
+                "minecraft_version" to minecraftVersion.get(),
+                "loader_version" to loaderVersion.get(),
+            )
+        )
+    }
+}
+
+tasks.withType<JavaCompile>().configureEach {
+    options.encoding = "UTF-8"
+    options.release = libs.versions.jdk.get().toInt()
+}
+
+java {
+    withSourcesJar()
+    toolchain { languageVersion = JavaLanguageVersion.of(libs.versions.jdk.get().toInt()) }
+}
+
+tasks.jar {
+    from("LICENSE") {
+        rename { "${it}_${project.base.archivesName.get()}" }
+    }
 }

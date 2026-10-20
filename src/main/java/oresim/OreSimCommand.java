@@ -10,7 +10,7 @@ import java.util.EnumSet;
 import java.util.Locale;
 import java.util.Set;
 
-/** {@code .oresim mine [ores]}, {@code .oresim stop}, {@code .oresim status}: drive Baritone over the simulated ores. */
+/** {@code .oresim mine [ores]}, {@code .oresim stop}, {@code .oresim status}: drive Baritone over the simulated ores; {@code .seed}: set the seed. */
 final class OreSimCommand {
     private OreSimCommand() {}
 
@@ -36,6 +36,29 @@ final class OreSimCommand {
             return 1;
         }));
         dispatcher.register(root);
+
+        // .seed [<seed> [version]] / .seed clear, as in Meteor Rejects; the version is ignored (current game's ore table)
+        dispatcher.register(LiteralArgumentBuilder.<ClientCommandSource>literal("seed")
+                .executes(ctx -> {
+                    var module = OreSimAddon.module;
+                    String text = module.seedText().trim();
+                    module.say("OreSim seed: " + (text.isEmpty() ? "from the singleplayer world" : text)
+                            + (module.seed() == null ? "" : " (in use: " + module.seed() + ")"));
+                    return 1;
+                })
+                .then(LiteralArgumentBuilder.<ClientCommandSource>literal("clear").executes(ctx -> {
+                    OreSimAddon.module.setSeedText("");
+                    OreSimAddon.module.say("OreSim: seed cleared");
+                    return 1;
+                }))
+                .then(RequiredArgumentBuilder.<ClientCommandSource, String>argument("seed", StringArgumentType.greedyString())
+                        .executes(ctx -> {
+                            String seed = StringArgumentType.getString(ctx, "seed").trim().split("\\s+")[0];
+                            OreSimAddon.module.setSeedText(seed);
+                            OreSimAddon.module.say("OreSim: seed set to " + OreSimModule.parseSeed(seed)
+                                    + (OreSimAddon.module.getRunning() ? "" : ", enable OreSim to see ores"));
+                            return 1;
+                        })));
     }
 
     private static int mine(Set<OreKind> kinds) {
