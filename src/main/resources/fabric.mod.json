@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "oresim",
+  "version": "${version}",
+  "name": "OreSim",
+  "description": "Predicts ore veins from the world seed and draws them through walls (LiquidBounce add-on).",
+  "authors": ["AC2LB"],
+  "license": "GPL-3.0-or-later",
+  "environment": "client",
+  "entrypoints": {
+    "liquidbounce": ["oresim.OreSimAddon"]
+  },
+  "depends": {
+    "minecraft": "~26.3",
+    "fabricloader": ">=0.19.5",
+    "liquidbounce": "*"
+  }
+}

@@ -1,0 +1,198 @@
+package oresim;
+
+import it.unimi.dsi.fastutil.longs.LongArrayList;
+import net.ccbluex.liquidbounce.event.events.GameTickEvent;
+import net.minecraft.client.Minecraft;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.world.Difficulty;
+import net.minecraft.world.level.GameType;
+import net.minecraft.world.level.LevelSettings;
+import net.minecraft.world.level.WorldDataConfiguration;
+import net.minecraft.world.level.chunk.ChunkAccess;
+import net.minecraft.world.level.levelgen.WorldOptions;
+import net.minecraft.world.level.levelgen.presets.WorldPresets;
+
+import java.util.EnumMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * Development check, enabled by the ORESIM_AUTOTEST environment variable: makes a world, flies into the
+ * rock, enables the module, compares its prediction with the real ores, takes a screenshot and quits.
+ */
+final class OreSimDevTest {
+    private static final boolean ENABLED = System.getenv("ORESIM_AUTOTEST") != null;
+    private static final int RADIUS = 3;
+    private static int stage, ticks;
+
+    private OreSimDevTest() {}
+
+    static void install(net.ccbluex.liquidbounce.features.addon.LiquidBounceAddon addon) {
+        if (!ENABLED) return;
+        addon.on(GameTickEvent.class, event -> tick());
+    }
+
+    private static void tick() {
+        Minecraft mc = Minecraft.getInstance();
+        try {
+            switch (stage) {
+                case 0 -> {
+                    if (mc.level == null && mc.gui.screen() != null && ++ticks > 40) {
+                        var settings = new LevelSettings("oresim-test-" + System.currentTimeMillis() / 1000, GameType.CREATIVE,
+                                new LevelSettings.DifficultySettings(Difficulty.PEACEFUL, false, false), true, WorldDataConfiguration.DEFAULT);
+                        mc.createWorldOpenFlows().createFreshLevel(settings.levelName(), settings, WorldOptions.defaultWithRandomSeed(),
+                                WorldPresets::createNormalWorldDimensions, mc.gui.screen());
+                        stage = 1;
+                        ticks = 0;
+                    }
+                }
+                case 1 -> {
+                    if (mc.player != null && mc.level != null && ++ticks > 60) {
+                        if (mc.gui.screen() != null) mc.gui.setScreen(null);
+                        mc.player.connection.sendCommand("gamemode spectator");
+                        mc.player.connection.sendCommand("tp @s ~ -50 ~ 0 20");
+                        stage = 2;
+                        ticks = 0;
+                    }
+                }
+                case 2 -> {
+                    if (++ticks == 200) {
+                        OreSimulator.debugByFeature = new java.util.HashMap<>();
+                        OreSimAddon.module.setEnabled(true);
+                    } else if (ticks == 400) {
+                        OreSimAddon.LOG.info("ORESIM === overworld");
+                        report(mc);
+                        net.minecraft.client.Screenshot.grab(mc.gameDirectory, "oresim.png", mc.gameRenderer.mainRenderTarget(), 1, c -> {});
+                    } else if (ticks == 420) {
+                        mc.player.connection.sendCommand("execute in minecraft:the_nether run tp @s 0 20 0 0 20");
+                        stage = 3;
+                        ticks = 0;
+                    }
+                }
+                case 3 -> {
+                    if (++ticks == 600) {
+                        OreSimAddon.LOG.info("ORESIM === nether, dimension={}", mc.level.dimension());
+                        report(mc);
+                        net.minecraft.client.Screenshot.grab(mc.gameDirectory, "oresim-nether.png", mc.gameRenderer.mainRenderTarget(), 1, c -> {});
+                    } else if (ticks == 640) {
+                        OreSimAddon.LOG.info("ORESIM DONE");
+                        stage = 4;
+                        mc.stop();
+                    }
+                }
+                default -> {}
+            }
+        } catch (Throwable t) {
+            OreSimAddon.LOG.error("ORESIM test aborted", t);
+            stage = 4;
+        }
+    }
+
+    /** Prints the feature order of the real generator next to the one OreSim derived. */
+    private static void compareOrder(Minecraft mc) throws Exception {
+        var generator = mc.getSingleplayerServer().getLevel(mc.level.dimension()).getChunkSource().getGenerator();
+        var field = net.minecraft.world.level.chunk.ChunkGenerator.class.getDeclaredField("featuresPerStep");
+        field.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        var steps = ((java.util.function.Supplier<java.util.List<net.minecraft.world.level.biome.FeatureSorter.StepFeatureData>>) field.get(generator)).get();
+        StringBuilder real = new StringBuilder(), mine = new StringBuilder();
+        for (int step = 0; step < steps.size(); step++) {
+            var features = steps.get(step).features();
+            for (int i = 0; i < features.size(); i++) {
+                if (features.get(i).feature().value() instanceof net.minecraft.world.level.levelgen.feature.AbstractOreFeature ore) {
+                    var written = new java.util.ArrayList<net.minecraft.world.level.block.Block>();
+                    for (var r : ore.targetStates()) written.add(r.state().getBlock());
+                    real.append(step).append(':').append(i).append(':').append(OreKind.of(written)).append('/').append(ore.size()).append(' ');
+                }
+            }
+        }
+        var list = new java.util.ArrayList<>(OreSimAddon.module.table().all());
+        list.sort(java.util.Comparator.comparingInt((OreTable.Ore o) -> o.step()).thenComparingInt(OreTable.Ore::index));
+        for (var o : list) mine.append(o.step()).append(':').append(o.index()).append(':').append(o.kind()).append('/').append(o.feature().size()).append(' ');
+        OreSimAddon.LOG.info("ORESIM order real: {}", real);
+        OreSimAddon.LOG.info("ORESIM order mine: {}", mine);
+    }
+
+    private static void report(Minecraft mc) throws Exception {
+        compareOrder(mc);
+        var level = mc.level;
+        int pcx = mc.player.chunkPosition().x(), pcz = mc.player.chunkPosition().z();
+        Long seed = OreSimAddon.module.resolveSeed();
+        OreSimAddon.LOG.info("ORESIM seed={} player chunk={},{} loaded chunks={}", seed, pcx, pcz, OreSimAddon.module.chunkData().size());
+
+        Map<OreKind, Set<Long>> predicted = new EnumMap<>(OreKind.class);
+        Map<OreKind, Set<Long>> real = new EnumMap<>(OreKind.class);
+        for (OreKind kind : OreKind.values()) {
+            predicted.put(kind, new HashSet<>());
+            real.put(kind, new HashSet<>());
+        }
+
+        for (int cx = pcx - RADIUS; cx <= pcx + RADIUS; cx++) {
+            for (int cz = pcz - RADIUS; cz <= pcz + RADIUS; cz++) {
+                var data = OreSimAddon.module.chunkData().get(net.minecraft.world.level.ChunkPos.pack(cx, cz));
+                if (data != null) {
+                    for (var e : data.entrySet()) for (int i = 0; i < e.getValue().size(); i++) predicted.get(e.getKey()).add(e.getValue().getLong(i));
+                }
+                ChunkAccess chunk = level.getChunkSource().getChunkNow(cx, cz);
+                if (chunk == null) continue;
+                BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+                for (int y = level.getMinY(); y < level.getMaxY(); y++) {
+                    for (int x = 0; x < 16; x++) {
+                        for (int z = 0; z < 16; z++) {
+                            pos.set((cx << 4) + x, y, (cz << 4) + z);
+                            String path = BuiltInRegistries.BLOCK.getKey(chunk.getBlockState(pos).getBlock()).getPath();
+                            if (!path.endsWith("_ore") && !path.equals("ancient_debris")) continue;
+                            for (OreKind kind : OreKind.values()) {
+                                String key = kind.name().toLowerCase(java.util.Locale.ROOT);
+                                if (path.equals(key + "_ore") || path.equals("deepslate_" + key + "_ore")
+                                        || (kind == OreKind.DEBRIS && path.equals("ancient_debris"))
+                                        || (kind == OreKind.GOLD && path.equals("nether_gold_ore"))
+                                        || (kind == OreKind.QUARTZ && path.equals("nether_quartz_ore"))) {
+                                    real.get(kind).add(pos.asLong());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        for (OreKind kind : new OreKind[]{OreKind.COAL, OreKind.IRON}) {
+            StringBuilder bands = new StringBuilder();
+            for (int y0 = level.getMinY(); y0 < level.getMaxY(); y0 += 32) {
+                int pc = 0, rc = 0, mc2 = 0;
+                for (long l : predicted.get(kind)) if (BlockPos.getY(l) >= y0 && BlockPos.getY(l) < y0 + 32) { pc++; if (real.get(kind).contains(l)) mc2++; }
+                for (long l : real.get(kind)) if (BlockPos.getY(l) >= y0 && BlockPos.getY(l) < y0 + 32) rc++;
+                if (pc + rc > 0) bands.append(y0).append(": p=").append(pc).append(" r=").append(rc).append(" m=").append(mc2).append(" | ");
+            }
+            OreSimAddon.LOG.info("ORESIM bands {} {}", kind, bands);
+        }
+        var byFeature = OreSimulator.debugByFeature;
+        if (byFeature != null) {
+            for (var entry : byFeature.entrySet()) {
+                var ore = entry.getKey();
+                int total = 0, hits = 0;
+                for (int i = 0; i < entry.getValue().size(); i++) {
+                    long l = entry.getValue().getLong(i);
+                    int cx = BlockPos.getX(l) >> 4, cz = BlockPos.getZ(l) >> 4;
+                    if (Math.abs(cx - pcx) > RADIUS - 1 || Math.abs(cz - pcz) > RADIUS - 1) continue;
+                    total++;
+                    if (real.get(ore.kind()).contains(l)) hits++;
+                }
+                OreSimAddon.LOG.info("ORESIM feature {} step={} index={} size={} discard={} {} positions={} real-hit={}%", ore.kind(), ore.step(), ore.index(),
+                        ore.feature().size(), ore.feature().discardChanceOnAirExposure(), ore.scattered() ? "scattered" : "vein", total, total == 0 ? 0 : 100 * hits / total);
+            }
+            byFeature.clear();
+        }
+        for (OreKind kind : OreKind.values()) {
+            Set<Long> p = predicted.get(kind), r = real.get(kind);
+            if (p.isEmpty() && r.isEmpty()) continue;
+            Set<Long> hit = new HashSet<>(p);
+            hit.retainAll(r);
+            OreSimAddon.LOG.info("ORESIM {} predicted={} real={} matched={} precision={}% recall={}%", kind, p.size(), r.size(), hit.size(),
+                    p.isEmpty() ? 0 : 100 * hit.size() / p.size(), r.isEmpty() ? 0 : 100 * hit.size() / r.size());
+        }
+    }
+}
