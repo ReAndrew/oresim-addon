@@ -39,6 +39,9 @@ public final class OreSimModule extends ClientModule {
     /** Always shown, like Rejects' "baritone" setting; it does something only when the Baritone mod is installed. */
     private final net.ccbluex.liquidbounce.config.types.Value<Boolean> baritoneAllowed = bool("Baritone", false);
     private final net.ccbluex.liquidbounce.config.types.Value<Boolean> pickUp = bool("PickUpDrops", true);
+    /** Baritone also mines real ores that touch air: the simulation hides those (AirCheck), so it never lists them. */
+    private final net.ccbluex.liquidbounce.config.types.Value<Boolean> overscan = bool("Overscan", true);
+    private final Map<Long, Map<OreKind, LongArrayList>> exposed = new HashMap<>();
     private boolean baritoneMissingShown;
     private BaritoneBridge baritone;
     private final java.util.Set<Long> unreachable = new java.util.HashSet<>();
@@ -55,7 +58,10 @@ public final class OreSimModule extends ClientModule {
         for (OreKind kind : OreKind.values()) enabledKinds.put(kind, bool(kind.valueName, true));
 
         on(WorldRenderEvent.class, this::render);
-        on(ChunkLoadEvent.class, event -> onChunk(event.getX(), event.getZ()));
+        on(ChunkLoadEvent.class, event -> {
+            forgetExposed(event.getX(), event.getZ());
+            onChunk(event.getX(), event.getZ());
+        });
         on(BlockChangeEvent.class, this::onBlockChange);
         on(WorldChangeEvent.class, event -> {
             reset();
@@ -98,6 +104,7 @@ public final class OreSimModule extends ClientModule {
         if (baritone != null) baritone.stop();
         unreachable.clear();
         chunks.clear();
+        exposed.clear();
         table = null;
         seed = null;
         tableDimension = null;
@@ -156,8 +163,82 @@ public final class OreSimModule extends ClientModule {
                 }
             }
         }
+        if (overscan.get()) addExposed(found, kinds, px, py, pz, reach);
         found.sort(java.util.Comparator.comparingDouble(p -> p.distToCenterSqr(px, py, pz)));
         return found.size() > limit ? List.copyOf(found.subList(0, limit)) : List.copyOf(found);
+    }
+
+    private void addExposed(List<BlockPos> found, java.util.Set<OreKind> kinds, double px, double py, double pz, double reach) {
+        int cx = (int) Math.floor(px) >> 4, cz = (int) Math.floor(pz) >> 4;
+        int range = chunkRange.get();
+        for (int x = cx - range; x <= cx + range; x++) {
+            for (int z = cz - range; z <= cz + range; z++) {
+                Map<OreKind, LongArrayList> chunk = exposedIn(x, z);
+                for (Map.Entry<OreKind, LongArrayList> entry : chunk.entrySet()) {
+                    if (!kinds.contains(entry.getKey())) continue;
+                    LongArrayList positions = entry.getValue();
+                    for (int i = 0; i < positions.size(); i++) {
+                        long packed = positions.getLong(i);
+                        if (unreachable.contains(packed)) continue;
+                        BlockPos pos = BlockPos.of(packed);
+                        double dx = pos.getX() + 0.5 - px, dz = pos.getZ() + 0.5 - pz;
+                        if (dx * dx + dz * dz > reach * reach) continue;
+                        if (mc.level.getBlockState(pos).isAir()) continue;
+                        found.add(pos);
+                    }
+                }
+            }
+        }
+    }
+
+    /** Real ores of a chunk that touch air, scanned once and kept until the chunk or a neighbour changes. */
+    private Map<OreKind, LongArrayList> exposedIn(int cx, int cz) {
+        long key = ChunkPos.pack(cx, cz);
+        Map<OreKind, LongArrayList> cached = exposed.get(key);
+        if (cached != null) return cached;
+        var chunk = mc.level.getChunkSource().getChunkNow(cx, cz);
+        if (chunk == null) return Map.of();
+
+        Map<OreKind, LongArrayList> result = new EnumMap<>(OreKind.class);
+        BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+        BlockPos.MutableBlockPos near = new BlockPos.MutableBlockPos();
+        var sections = chunk.getSections();
+        for (int i = 0; i < sections.length; i++) {
+            var section = sections[i];
+            if (section.hasOnlyAir() || !section.maybeHas(state -> OreKind.isOre(state.getBlock()))) continue;
+            int baseY = mc.level.getMinY() + i * 16;
+            for (int y = 0; y < 16; y++) {
+                for (int z = 0; z < 16; z++) {
+                    for (int x = 0; x < 16; x++) {
+                        var block = section.getBlockState(x, y, z).getBlock();
+                        if (!OreKind.isOre(block)) continue;
+                        OreKind kind = OreKind.of(List.of(block));
+                        if (kind == null) continue;
+                        pos.set((cx << 4) + x, baseY + y, (cz << 4) + z);
+                        if (!touchesAir(pos, near)) continue;
+                        result.computeIfAbsent(kind, k -> new LongArrayList()).add(pos.asLong());
+                    }
+                }
+            }
+        }
+        exposed.put(key, result);
+        return result;
+    }
+
+    private boolean touchesAir(BlockPos pos, BlockPos.MutableBlockPos near) {
+        for (net.minecraft.core.Direction direction : net.minecraft.core.Direction.values()) {
+            near.setWithOffset(pos, direction);
+            if (mc.level.getChunkSource().getChunkNow(near.getX() >> 4, near.getZ() >> 4) != null
+                    && mc.level.getBlockState(near).isAir()) return true;
+        }
+        return false;
+    }
+
+    /** Drops the cached scan of a chunk and its neighbours (an ore at the border may touch air on the other side). */
+    private void forgetExposed(int cx, int cz) {
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) exposed.remove(ChunkPos.pack(cx + dx, cz + dz));
+        }
     }
 
     /** Whether a goal has been mined (its block is now air) or is no longer predicted. */
@@ -303,6 +384,7 @@ public final class OreSimModule extends ClientModule {
     }
 
     private void onBlockChange(BlockChangeEvent event) {
+        forgetExposed(event.getBlockPos().getX() >> 4, event.getBlockPos().getZ() >> 4);
         if (event.getNewState().canOcclude() || !airCheck.get()) return;
         BlockPos pos = event.getBlockPos();
         long packed = pos.asLong();
