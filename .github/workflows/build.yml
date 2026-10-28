@@ -3,6 +3,7 @@ name: Build
 on:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]
   pull_request:
     branches: [ main ]
   release:
@@ -57,10 +58,13 @@ jobs:
             --prerelease \
             --target "$GITHUB_SHA"
 
-      - name: Attach jar to release
-        if: github.event_name == 'release'
+      # Pushing a tag like v1.1.0+26.3 is enough: this creates the release and attaches the jar.
+      # (A release published by hand on the web works too.) A tag with a dash, e.g. v1.2.0-rc1, is a pre-release.
+      - name: Create release and attach jar
+        if: github.event_name == 'release' || github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name || github.ref_name }}
         run: |
           set -euo pipefail
 
@@ -68,24 +72,33 @@ jobs:
           [ -n "$JAR" ] || { echo "[ERROR] no jar in build/libs" >&2; exit 1; }
 
           # The tag names the version the jar was built as, e.g. v1.0.0+26.3
-          TAG="${{ github.event.release.tag_name }}"
           case "$JAR" in
             *"-${TAG#v}.jar") ;;
             *) echo "[ERROR] $JAR does not match the tag $TAG, check mod_version and minecraft" >&2; exit 1 ;;
           esac
 
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            VERSION="${TAG#v}"
+            FLAGS=()
+            case "$VERSION" in *-*) FLAGS+=(--prerelease) ;; esac
+            gh release create "$TAG" \
+              --verify-tag \
+              --title "OreSim ${VERSION%%+*} (MC ${VERSION##*+})" \
+              --generate-notes "${FLAGS[@]}"
+          fi
           gh release upload "$TAG" "$JAR" --clobber
 
       - name: Publish to the marketplace
-        if: github.event_name == 'release' && !github.event.release.prerelease && vars.MARKETPLACE_ITEM_ID != ''
+        if: (github.event_name == 'release' || github.ref_type == 'tag') && !contains(github.event.release.tag_name || github.ref_name, '-') && vars.MARKETPLACE_ITEM_ID != ''
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           API_TOKEN: ${{ secrets.API_TOKEN }}
           ITEM_ID: ${{ vars.MARKETPLACE_ITEM_ID }}
-          VERSION: ${{ github.event.release.tag_name }}
-          CHANGELOG: ${{ github.event.release.body }}
-          SOURCE_RELEASE_URL: ${{ github.event.release.html_url }}
+          VERSION: ${{ github.event.release.tag_name || github.ref_name }}
         run: |
           set -euo pipefail
+          CHANGELOG=$(gh release view "$VERSION" --json body --jq .body)
+          SOURCE_RELEASE_URL=$(gh release view "$VERSION" --json url --jq .url)
           SOURCE_COMMIT=$(git rev-parse HEAD)
           JAR=$(find build/libs -name '*.jar' -not -name '*-sources.jar' | head -n1)
           [ -n "$JAR" ] || { echo "[ERROR] no jar in build/libs" >&2; exit 1; }
