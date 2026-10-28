@@ -3,6 +3,7 @@ package oresim;
 import baritone.api.BaritoneAPI;
 import baritone.api.IBaritone;
 import baritone.api.pathing.goals.Goal;
+import baritone.api.pathing.goals.GoalBlock;
 import baritone.api.pathing.goals.GoalComposite;
 import baritone.api.pathing.goals.GoalTwoBlocks;
 import baritone.api.process.IBaritoneProcess;
@@ -10,10 +11,15 @@ import baritone.api.process.PathingCommand;
 import baritone.api.process.PathingCommandType;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.phys.AABB;
 
 import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -84,6 +90,7 @@ final class BaritoneBridge implements IBaritoneProcess {
         goals = List.of();
         composite = null;
         sinceRefresh = 0;
+        resetPickup();
         active = true;
         return "Baritone is mining the simulated " + kinds;
     }
@@ -91,6 +98,7 @@ final class BaritoneBridge implements IBaritoneProcess {
     void stop() {
         active = false;
         goals = List.of();
+        resetPickup();
         IBaritone baritone = registeredWith;
         if (baritone != null) baritone.getPathingBehavior().cancelEverything();
     }
@@ -131,6 +139,14 @@ final class BaritoneBridge implements IBaritoneProcess {
             }
         }
 
+        if (module.pickUpDrops()) {
+            noteMined();
+            PathingCommand pickup = pickUp(calcFailed);
+            if (pickup != null) return pickup;
+        } else {
+            resetPickup();
+        }
+
         boolean refresh = goals.isEmpty() || ++sinceRefresh >= REFRESH || calcFailed;
         if (!refresh) {
             for (BlockPos pos : goals) {
@@ -160,10 +176,96 @@ final class BaritoneBridge implements IBaritoneProcess {
         return new PathingCommand(composite, changed ? PathingCommandType.SET_GOAL_AND_PATH : PathingCommandType.REVALIDATE_GOAL_AND_PATH);
     }
 
+    /** How long after mining a block its drop is still looked for (ticks): the item appears a few ticks after the break. */
+    private static final int DROP_WINDOW = 40;
+    /** Longest time spent walking to a single item before it is given up on (ticks). */
+    private static final int ITEM_TIMEOUT = 120;
+    /** How far from the mined block a drop can have flown or been pushed (blocks). */
+    private static final double DROP_RADIUS = 6.0;
+
+    /** Mined goal blocks whose drops may still lie around, with the tick they were mined at. */
+    private final Map<BlockPos, Integer> minedAt = new HashMap<>();
+    private final Set<Integer> abandonedItems = new HashSet<>();
+    private int tickCount;
+    private int itemId = -1;
+    private int itemSince;
+    private BlockPos itemGoal;
+
+    private void resetPickup() {
+        minedAt.clear();
+        abandonedItems.clear();
+        itemId = -1;
+        itemGoal = null;
+    }
+
+    /** Remembers goal blocks that just turned to air, to pick up what they dropped. */
+    private void noteMined() {
+        tickCount++;
+        for (BlockPos pos : goals) {
+            if (module.isMinedOut(pos)) minedAt.putIfAbsent(pos, tickCount);
+        }
+        minedAt.values().removeIf(tick -> tickCount - tick > DROP_WINDOW + ITEM_TIMEOUT);
+    }
+
+    /**
+     * Walks to the nearest item dropped by a block mined a moment ago; null when there is nothing to collect
+     * (mining then goes on). Items that cannot be reached, or that take too long, are given up on.
+     */
+    private PathingCommand pickUp(boolean calcFailed) {
+        if (minedAt.isEmpty() || mc.level == null || mc.player == null) return null;
+        if (calcFailed && itemId != -1) {
+            abandonedItems.add(itemId);
+            itemId = -1;
+        }
+
+        ItemEntity best = null;
+        double bestDist = Double.MAX_VALUE;
+        for (Map.Entry<BlockPos, Integer> mined : minedAt.entrySet()) {
+            BlockPos pos = mined.getKey();
+            AABB area = new AABB(pos).inflate(DROP_RADIUS);
+            for (ItemEntity item : mc.level.getEntitiesOfClass(ItemEntity.class, area)) {
+                if (item.isRemoved() || abandonedItems.contains(item.getId())) continue;
+                double dist = item.distanceToSqr(mc.player);
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    best = item;
+                }
+            }
+        }
+
+        if (best == null) {
+            // Nothing lying around: keep waiting only while a fresh drop may still show up.
+            boolean waiting = false;
+            for (int tick : minedAt.values()) waiting |= tickCount - tick <= DROP_WINDOW;
+            itemId = -1;
+            itemGoal = null;
+            if (!waiting) minedAt.clear();
+            return null;
+        }
+
+        if (best.getId() != itemId) {
+            itemId = best.getId();
+            itemSince = tickCount;
+            itemGoal = null;
+        } else if (tickCount - itemSince > ITEM_TIMEOUT) {
+            abandonedItems.add(itemId);
+            itemId = -1;
+            itemGoal = null;
+            return null;
+        }
+
+        BlockPos target = best.blockPosition();
+        boolean changed = !target.equals(itemGoal);
+        itemGoal = target;
+        return new PathingCommand(new GoalBlock(target),
+                changed ? PathingCommandType.SET_GOAL_AND_PATH : PathingCommandType.REVALIDATE_GOAL_AND_PATH);
+    }
+
     private PathingCommand giveWay() {
         active = false;
         goals = List.of();
         composite = null;
+        resetPickup();
         return new PathingCommand(null, PathingCommandType.DEFER);
     }
 

@@ -38,6 +38,7 @@ public final class OreSimModule extends ClientModule {
 
     /** Always shown, like Rejects' "baritone" setting; it does something only when the Baritone mod is installed. */
     private final net.ccbluex.liquidbounce.config.types.Value<Boolean> baritoneAllowed = bool("Baritone", false);
+    private final net.ccbluex.liquidbounce.config.types.Value<Boolean> pickUp = bool("PickUpDrops", true);
     private boolean baritoneMissingShown;
     private BaritoneBridge baritone;
     private final java.util.Set<Long> unreachable = new java.util.HashSet<>();
@@ -115,6 +116,11 @@ public final class OreSimModule extends ClientModule {
             if (enabledKinds.get(kind).get()) kinds.add(kind);
         }
         return baritone.start(kinds);
+    }
+
+    /** Whether Baritone collects the items a mined ore dropped before going to the next one. */
+    boolean pickUpDrops() {
+        return pickUp.get();
     }
 
     public void baritoneStop() {

@@ -19,7 +19,8 @@ their placement modifiers), so it follows the ore table of the Minecraft version
   one toggle per ore.
 - **Baritone** (optional, needs the [Baritone](https://github.com/cabaletta/baritone) mod): with the setting on,
   `#mine diamond_ore` mines the simulated diamonds instead of searching. `.oresim mine [ores]`,
-  `.oresim stop` and `.oresim status` drive it directly.
+  `.oresim stop` and `.oresim status` drive it directly. With **PickUpDrops** (on by default) Baritone walks
+  to the items a mined ore dropped before heading to the next one.
 
 ## Accuracy
 
